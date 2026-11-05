@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f3d63">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Summit Chofer">
+  <title>Summit Safety · Chofer</title>
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    main { max-width: 640px; padding-bottom: 40px; }
+    .next-card { border: 2px solid var(--orange); }
+    .next-card .label { color: var(--orange); font-weight: 800; font-size: 13px; letter-spacing: .5px; text-transform: uppercase; }
+    .next-card .name { font-size: 22px; font-weight: 800; margin-top: 4px; }
+    .next-card .addr { font-size: 16px; color: var(--muted); margin-top: 2px; }
+    .actions-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .notes-box { background: #fff6dd; color: #6b4a00; padding: 10px 12px; border-radius: 10px; margin-top: 10px; font-size: 15px; }
+    .stop-row { cursor: pointer; }
+    .reason { display: block; padding: 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; cursor: pointer; font-weight: 600; }
+    .reason input { margin-right: 10px; }
+    .reason:has(input:checked) { border-color: var(--navy); background: #eef4fb; }
+    .photo-add { width: 64px; height: 64px; border-radius: 8px; border: 2px dashed #b7c2d1; display: flex; align-items: center; justify-content: center; color: var(--navy); background: #f7f9fc; min-height: 0; padding: 0; }
+    .pending-dot { position: absolute; bottom: 3px; left: 3px; background: var(--amber); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 6px; font-weight: 700; }
+    #drvmap { height: 60vh; border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="dot"></span><span id="hdr">Summit Safety</span></div><div class="spacer"></div>
+    <button class="icon" id="mapbtn" aria-label="Mapa"></button><button class="icon" id="refresh" aria-label="Actualizar"></button></header>
+  <main id="main"><div class="empty"><span class="spinner dark"></span></div></main>
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="/common.js"></script>
+  <script src="/driver.js"></script>
+</body>
+</html>

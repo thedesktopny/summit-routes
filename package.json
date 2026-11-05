@@ -1,0 +1,13 @@
+{
+  "name": "summit-routes",
+  "version": "2.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
+  },
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,23 @@
+{
+  // Summit Safety Routes — Cloudflare Worker config.
+  // The database (DB) and photo bucket (FILES) are created automatically on the first deploy.
+  "name": "summit-routes",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  // Daily clean-up of old GPS points (keeps 90 days).
+  "triggers": { "crons": ["17 9 * * *"] },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "summit-routes-db" }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "summit-routes-photos" }
+  ],
+  "observability": { "enabled": true }
+}
