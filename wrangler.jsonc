@@ -4,6 +4,9 @@
   "name": "summit-routes",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
+  // Keep the public address on; no separate test addresses.
+  "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
