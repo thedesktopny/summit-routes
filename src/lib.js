@@ -194,7 +194,7 @@ export async function ensureSchema(env) {
   const want = {
     stops: { departed_at: 'INTEGER', arrive_source: "TEXT DEFAULT ''" },
     routes: { last_eta_at: 'INTEGER', gps_alert_at: 'INTEGER' },
-    drivers: { app_version: "TEXT DEFAULT ''", app_info: "TEXT DEFAULT ''" },
+    drivers: { app_version: "TEXT DEFAULT ''", app_info: "TEXT DEFAULT ''", ot_seen_at: 'INTEGER' },
   };
   for (const [table, cols] of Object.entries(want)) {
     const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all();

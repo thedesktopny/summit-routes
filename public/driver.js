@@ -342,13 +342,16 @@
       if (blocking().length) html += `<div class="banner">${icon('pin')}<div class="grow">La oficina no puede ver tu ubicación. Arregla lo de arriba.</div></div>`;
       else if (!S.gpsOn) html += `<div class="banner">${icon('pin')}<div class="grow">Buscando señal GPS…</div><button class="btn-sm" id="gps">Reintentar</button></div>`;
       else html += `<div class="banner ok">${icon('pin')}<div class="grow small">Ubicación activa. Puedes usar Google Maps o Waze; la app sigue enviando.${N.queue.length > 3 ? ` (${N.queue.length} puntos por enviar)` : ''}</div></div>`;
+    } else if (ar && isIos() && d.driver.ot) {
+      html += `<div class="banner ok">${icon('pin')}<div class="grow small">OwnTracks envía tu ubicación durante la ruta. Si la oficina no te ve, ábrelo aquí.</div><a class="btn btn-sm" href="${esc(d.driver.ot_link)}">Abrir OwnTracks</a></div>`;
     } else if (ar) {
       if (S.gpsDenied) html += `<div class="banner">${icon('pin')}<div class="grow">La ubicación está bloqueada. Actívala para esta página en los ajustes del teléfono.</div></div>`;
       else if (!S.gpsOn) html += `<div class="banner">${icon('pin')}<div class="grow">Ubicación apagada.</div><button class="btn-sm" id="gps">Activar</button></div>`;
       else html += `<div class="banner ok">${icon('pin')}<div class="grow small">Compartiendo tu ubicación mientras esta página está abierta.</div></div>`;
     }
 
-    if (!NATIVE && isAndroid) html += `<div class="banner info"><div class="grow small">Instala la app <b>Summit Chofer</b> para que la oficina vea dónde vas mientras usas Google Maps.</div><a class="btn btn-sm btn-primary" href="/app.apk">Descargar</a></div>`;
+    if (isIos() && !d.driver.ot) html += `<div class="banner info"><div class="grow small">Para que la oficina vea dónde vas mientras usas Google Maps, configura <b>OwnTracks</b> (gratis, 2 minutos).</div><a class="btn btn-sm btn-primary" href="/ot/${TOKEN}">Configurar</a></div>`;
+    else if (!NATIVE && isAndroid) html += `<div class="banner info"><div class="grow small">Instala la app <b>Summit Chofer</b> para que la oficina vea dónde vas mientras usas Google Maps.</div><a class="btn btn-sm btn-primary" href="/app.apk">Descargar</a></div>`;
     else if (S.installEvt) html += `<div class="banner info"><div class="grow">Instala la app en tu teléfono para abrirla más rápido.</div><button class="btn-sm btn-primary" id="inst">Instalar</button></div>`;
     else if (!NATIVE && isIos() && !isStandalone()) html += `<div class="banner info small"><div class="grow">Para recibir avisos en iPhone: toca <b>Compartir</b> y luego <b>Agregar a inicio</b>, y abre la app desde ahí.</div></div>`;
 
@@ -444,6 +447,8 @@
         startGps();
         await load();
         toast('¡Buen viaje!');
+        // iPhone with OwnTracks: switch it to tracking right away.
+        if (!NATIVE && isIos() && S.data.driver.ot && S.data.driver.ot_link) { setTimeout(() => { location.href = S.data.driver.ot_link; }, 600); return; }
         if (!NATIVE && C.pushSupported() && Notification.permission === 'default') alertsSheet();
       } catch (e) { toast(e.message, true); }
     }));

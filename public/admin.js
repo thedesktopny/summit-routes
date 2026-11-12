@@ -676,14 +676,14 @@
   // ---------------- Drivers ----------------
   async function driversView(main) {
     main.innerHTML = `<div class="section-title" style="margin-top:4px"><h2>Drivers</h2><button class="btn-primary" id="add">${icon('plus')} Add driver</button></div>
-      <p class="muted small" style="margin-top:-4px">Each driver installs the <b>Summit Chofer</b> app (Android) and pastes their private link once. The app keeps sending GPS while they use Google Maps or Waze. If a phone is lost, make a new link — the old one stops working.</p>
+      <p class="muted small" style="margin-top:-4px">Android drivers install the <b>Summit Chofer</b> app and paste their private link once; iPhone drivers set up the free <b>OwnTracks</b> app from the link in the message. The app keeps sending GPS while they use Google Maps or Waze. If a phone is lost, make a new link — the old one stops working.</p>
       <div class="row wrap" style="margin:-2px 0 12px"><a class="btn-sm btn" href="/app.apk">${icon('download', 16)} Download app (APK)</a></div>
       <div class="list" id="dl"></div>`;
     async function load() {
       await loadDrivers();
       $('#dl').innerHTML = S.drivers.length ? S.drivers.map((d) => `<div class="card" data-id="${d.id}" style="${d.active ? '' : 'opacity:.6'}">
         <div class="row"><div class="grow"><h3>${esc(d.name)} ${d.active ? '' : '<span class="chip">Off</span>'}</h3>
-          <div class="small muted">${d.phone ? esc(d.phone) + ' · ' : ''}last opened ${C.ago(d.last_seen_at)} · ${d.app_version ? `<b style="color:var(--green)">phone app ${esc(d.app_version)}</b>` : 'no phone app yet'}${d.last_pos_at ? ` · GPS ${C.ago(d.last_pos_at)}` : ''}</div></div></div>
+          <div class="small muted">${d.phone ? esc(d.phone) + ' · ' : ''}last opened ${C.ago(d.last_seen_at)} · ${d.app_version ? `<b style="color:var(--green)">${/OwnTracks/.test(d.app_version) ? esc(d.app_version) : 'phone app ' + esc(d.app_version)}</b>` : 'no phone app yet'}${d.last_pos_at ? ` · GPS ${C.ago(d.last_pos_at)}` : ''}</div></div></div>
         <div class="row wrap" style="margin-top:10px">
           ${d.active ? `<button class="btn-sm btn-primary" data-act="share">${icon('link', 16)} Share link</button>` : ''}
           <button class="btn-sm" data-act="edit">${icon('edit', 16)} Edit</button>
@@ -715,7 +715,7 @@
 
   function shareLink(d) {
     const link = `${location.origin}/d/${d.token}`;
-    const msg = `Hola ${d.name}, para las rutas de ${S.settings.company_name}:\n1) Instala la app Summit Chofer: ${location.origin}/app.apk\n2) Ábrela, pega este enlace y toca Entrar: ${link}\n3) Acepta la ubicación, la batería y las notificaciones.`;
+    const msg = `Hola ${d.name}, para las rutas de ${S.settings.company_name}:\nTu enlace: ${link}\n\nANDROID:\n1) Instala la app Summit Chofer: ${location.origin}/app.apk\n2) Ábrela, pega tu enlace y toca Entrar.\n3) Acepta la ubicación, la batería y las notificaciones.\n\nIPHONE:\n1) Abre este enlace y sigue los pasos (OwnTracks): ${location.origin}/ot/${d.token}\n2) Luego usa tu enlace para las rutas.`;
     const phone = String(d.phone || '').replace(/[^\d]/g, '');
     const wa = phone ? `https://wa.me/${phone.length === 10 ? '1' + phone : phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
     const s = sheet(`${d.name}'s link`, `<div class="link-box" style="margin-bottom:12px">${esc(link)}</div>

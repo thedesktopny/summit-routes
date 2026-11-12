@@ -159,7 +159,7 @@ export async function driverApi(req, env, ctx, url, token, sub) {
     const { results: upcoming } = await env.DB.prepare(`SELECT r.date, COUNT(s.id) AS stops FROM routes r LEFT JOIN stops s ON s.route_id = r.id
       WHERE r.driver_id = ? AND r.date > ? AND r.status != 'done' GROUP BY r.date ORDER BY r.date LIMIT 7`).bind(driver.id, today).all();
     return json({
-      driver: { id: driver.id, name: driver.name },
+      driver: { id: driver.id, name: driver.name, ot: !!driver.ot_seen_at, ot_link: owntracksLink(url.origin, driver, 2) },
       company: s.company_name,
       today,
       timezone: s.timezone,
@@ -285,4 +285,88 @@ export async function driverApi(req, env, ctx, url, token, sub) {
   }
 
   throw new HttpError(404, 'No encontrado');
+}
+
+
+// ---------------- iPhone: OwnTracks app ----------------
+// The free OwnTracks app (App Store) posts the phone's location to /api/ot/<token>.
+// It only tracks during a route: our reply switches it to "move" (tracking) while a route
+// is active and to "quiet" (off) when there is none.
+const OT_MOVE = 2, OT_QUIET = -1;
+
+export function owntracksConfig(origin, driver, monitoring) {
+  return {
+    _type: 'configuration',
+    mode: 3,                       // HTTP
+    url: `${origin}/api/ot/${driver.token}`,
+    auth: false,
+    deviceId: 'ruta',
+    tid: (driver.name || 'SR').replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase() || 'SR',
+    monitoring,
+    cmd: true,
+    remoteConfiguration: true,
+    allowRemoteLocation: true,
+    locatorDisplacement: 30,       // send after ~30 m of movement…
+    locatorInterval: 60,           // …or every minute
+    extendedData: true,
+  };
+}
+
+export function owntracksLink(origin, driver, monitoring) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(owntracksConfig(origin, driver, monitoring)))));
+  return 'owntracks:///config?inline=' + b64;
+}
+
+const otCmd = monitoring => ({ _type: 'cmd', action: 'setConfiguration', configuration: { _type: 'configuration', monitoring } });
+
+export async function owntracksApi(req, env, ctx, token) {
+  const reply = arr => new Response(JSON.stringify(arr), { headers: { 'content-type': 'application/json' } });
+  if (req.method !== 'POST') return reply([]);
+  const driver = await findDriver(env, token);
+  if (!driver) return reply([otCmd(OT_QUIET)]); // old/removed link: turn tracking off
+  let b = null;
+  try { b = await req.json(); } catch { return reply([]); }
+  const msgs = Array.isArray(b) ? b : [b];
+  const route = await env.DB.prepare(`SELECT id FROM routes WHERE driver_id = ? AND status = 'active' ORDER BY started_at DESC LIMIT 1`).bind(driver.id).first();
+  const now = Date.now();
+  await env.DB.prepare(`UPDATE drivers SET ot_seen_at = ?, app_version = CASE WHEN app_version = '' OR app_version LIKE 'OwnTracks%' THEN 'OwnTracks (iPhone)' ELSE app_version END WHERE id = ?`).bind(now, driver.id).run();
+
+  let lastMode = null;
+  const pts = [];
+  for (const m of msgs) {
+    if (!m || m._type !== 'location') continue;
+    if (m.m !== undefined) lastMode = Number(m.m);
+    pts.push({
+      lat: m.lat, lng: m.lon, acc: m.acc,
+      speed: m.vel != null && m.vel >= 0 ? Math.round((m.vel / 3.6) * 10) / 10 : null,
+      heading: m.cog, at: m.tst ? m.tst * 1000 : now,
+    });
+  }
+  if (route) {
+    // Points only count while a route is going on.
+    if (pts.length) await ingestPositions(env, ctx, driver, pts, route.id);
+    return reply(lastMode === OT_MOVE ? [] : [otCmd(OT_MOVE)]);
+  }
+  // No route right now: nothing is saved, and the phone is told to stop tracking.
+  return reply([otCmd(OT_QUIET)]);
+}
+
+// Page the driver opens on the iPhone to set OwnTracks up.
+export async function owntracksSetupPage(env, url, token) {
+  const driver = await findDriver(env, token);
+  const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const body = driver ? `
+    <h1>Ubicación en iPhone</h1>
+    <p class="muted">Hola ${esc(driver.name)}. Así la oficina ve dónde vas mientras usas Google Maps o Waze. Solo se envía durante la ruta.</p>
+    <ol>
+      <li><b>Instala OwnTracks</b> (gratis):<br><a class="btn" href="https://apps.apple.com/app/id692424691">Abrir App Store</a></li>
+      <li><b>Toca aquí</b> para configurarla (si pregunta, elige Abrir / Importar):<br><a class="btn btn-primary" href="${esc(owntracksLink(url.origin, driver, OT_MOVE))}">Configurar OwnTracks</a></li>
+      <li>Cuando pida ubicación, elige <b>“Permitir siempre”</b>. Si no aparece: Ajustes → OwnTracks → Ubicación → <b>Siempre</b> y <b>Ubicación exacta</b> encendida.</li>
+      <li>Vuelve a tu enlace de rutas y toca <b>Comenzar ruta</b> como siempre.</li>
+    </ol>
+    <p><a href="/d/${esc(driver.token)}">Ir a mis rutas</a></p>` : '<h1>Enlace no válido</h1><p>Pide un enlace nuevo a la oficina.</p>';
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Configurar iPhone</title><link rel="stylesheet" href="/app.css"><style>main{max-width:520px;padding-top:20px}ol{padding-left:20px}li{margin:0 0 18px;line-height:1.5}.btn{display:inline-block;margin-top:8px;text-decoration:none}</style></head>
+<body><main><div class="card">${body}</div></main></body></html>`;
+  return html;
 }

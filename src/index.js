@@ -1,7 +1,7 @@
 // Summit Safety Routes — Cloudflare Worker entry point.
 import { HttpError, json, ensureSchema, getSetting, setSetting, getSettings, todayIn, logEvent } from './lib.js';
 import { adminApi, adminState, adminSetup, adminLogin, adminLogout, requireAdmin } from './admin.js';
-import { driverApi, findDriver } from './driver.js';
+import { driverApi, findDriver, owntracksApi, owntracksSetupPage } from './driver.js';
 import { getVapid, notify } from './push.js';
 
 let originSaved = false;
@@ -121,6 +121,18 @@ export default {
         await requireAdmin(request, env);
         return await adminApi(request, env, ctx, url);
       }
+
+      m = path.match(/^\/api\/ot\/([A-Za-z0-9]{16,40})$/);
+      if (m) return await owntracksApi(request, env, ctx, m[1]);
+
+      m = path.match(/^\/ot\/([A-Za-z0-9]{16,40})$/);
+      if (m) return new Response(await owntracksSetupPage(env, url, m[1]), { headers: HTML_HEADERS });
+
+      m = path.match(/^\/api\/ot\/([A-Za-z0-9]{16,40})$/);
+      if (m) return await owntracksApi(request, env, ctx, m[1]);
+
+      m = path.match(/^\/ot\/([A-Za-z0-9]{16,40})$/);
+      if (m) return new Response(await owntracksSetupPage(env, url, m[1]), { headers: HTML_HEADERS });
 
       m = path.match(/^\/api\/d\/([A-Za-z0-9]{16,40})(\/.*)$/);
       if (m) return await driverApi(request, env, ctx, url, m[1], m[2]);
