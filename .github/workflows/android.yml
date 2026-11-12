@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -66,6 +66,9 @@ jobs:
           echo "${GITHUB_RUN_NUMBER}" > public/summit-chofer.version
           git add public/summit-chofer.apk public/summit-chofer.version
           git commit -m "Driver app build ${GITHUB_RUN_NUMBER}" || exit 0
+          # The build changes some generated files; throw those away before syncing.
+          git reset --hard HEAD
+          git clean -fdq -e public/summit-chofer.apk
           for i in 1 2 3; do
             git pull --rebase origin main && git push origin HEAD:main && exit 0
             sleep 5
