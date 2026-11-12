@@ -114,7 +114,7 @@ export async function travelMatrix(points, token) {
 }
 
 // Road geometry + per-leg times along an ordered list of points (chunks of 25 waypoints).
-export async function routeLine(points, token) {
+export async function routeLine(points, token, profile = 'driving') {
   if (points.length < 2) return null;
   if (!token) return null;
   try {
@@ -123,7 +123,7 @@ export async function routeLine(points, token) {
     for (let start = 0; start < points.length - 1; start += 24) {
       const chunk = points.slice(start, start + 25);
       const coords = chunk.map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
-      const u = new URL(`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}`);
+      const u = new URL(`https://api.mapbox.com/directions/v5/mapbox/${profile}/${coords}`);
       u.searchParams.set('geometries', 'geojson');
       u.searchParams.set('overview', 'full');
       u.searchParams.set('access_token', token);

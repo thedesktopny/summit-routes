@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Summit Chofer</string>
+    <string name="title_activity_main">Summit Chofer</string>
+    <string name="package_name">com.summitsafety.chofer</string>
+    <string name="custom_url_scheme">com.summitsafety.chofer</string>
+    <string name="capacitor_background_geolocation_notification_channel_name">Ubicación de la ruta</string>
+    <string name="capacitor_background_geolocation_notification_icon">drawable/ic_stat_route</string>
+    <string name="capacitor_background_geolocation_notification_color">#0F3D63</string>
+</resources>

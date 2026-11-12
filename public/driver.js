@@ -7,6 +7,22 @@
   const API = `/api/d/${TOKEN}`;
   const S = { data: null, gpsOn: false, watchId: null, lastSent: null, wakeLock: null, expanded: new Set(), showDone: false, installEvt: null };
 
+  // Running inside the Summit Chofer phone app (Android)?
+  const CAP = window.Capacitor;
+  const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform() && CAP.Plugins && CAP.Plugins.BackgroundGeolocation);
+  const isAndroid = /android/i.test(navigator.userAgent);
+  if (NATIVE) {
+    try { localStorage.setItem('summit_driver_token', TOKEN); } catch { /* ignore */ }
+    document.documentElement.classList.add('native');
+    // Open maps, Waze and phone calls in their own apps.
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (a.target === '_blank' || /^(tel|sms|mailto|geo|intent):/i.test(href)) { e.preventDefault(); location.href = a.href; }
+    }, true);
+  }
+
   // Per-driver install manifest
   const ml = document.createElement('link');
   ml.rel = 'manifest'; ml.href = `/d/${TOKEN}/manifest.webmanifest`;
@@ -90,9 +106,11 @@
       S.data = await C.api(`${API}/today`);
       $('#hdr').textContent = S.data.company;
       render();
+      if (NATIVE && N.watcher && !activeRoute()) { await sendNativeQueue(); stopNativeGps(); render(); }
     } catch (e) {
       if (e.status === 401) {
-        $('#main').innerHTML = `<div class="card empty"><h2>Este enlace ya no es válido</h2><p>Pide a la oficina un enlace nuevo.</p></div>`;
+        if (NATIVE) { try { localStorage.removeItem('summit_driver_token'); } catch { /* ignore */ } }
+        $('#main').innerHTML = `<div class="card empty"><h2>Este enlace ya no es válido</h2><p>Pide a la oficina un enlace nuevo.</p>${NATIVE ? '<a class="btn btn-primary" href="/app?change=1">Poner enlace nuevo</a>' : ''}</div>`;
         stopGps();
         return;
       }
@@ -125,6 +143,7 @@
   function activeRoute() { return S.data && S.data.routes.find((r) => r.status === 'active'); }
 
   function startGps() {
+    if (NATIVE) { startNativeGps(); return; }
     if (!('geolocation' in navigator) || S.watchId != null) return;
     S.watchId = navigator.geolocation.watchPosition(onPos, (err) => {
       S.gpsOn = false;
@@ -134,6 +153,7 @@
     keepAwake();
   }
   function stopGps() {
+    if (NATIVE) { stopNativeGps(); return; }
     if (S.watchId != null) navigator.geolocation.clearWatch(S.watchId);
     S.watchId = null; S.gpsOn = false;
   }
@@ -147,7 +167,7 @@
     if (!last || moved > 40 || now - last.t > 90000) {
       S.lastSent = { latitude: c.latitude, longitude: c.longitude, t: now };
       const r = activeRoute();
-      C.api(`${API}/position`, { method: 'POST', body: { lat: c.latitude, lng: c.longitude, acc: c.accuracy, speed: c.speed, heading: c.heading, route_id: r ? r.id : null } }).catch(() => {});
+      C.api(`${API}/position`, { method: 'POST', body: { lat: c.latitude, lng: c.longitude, acc: c.accuracy, speed: c.speed, heading: c.heading, route_id: r ? r.id : null } }).then((res) => { if (res && res.changed) load(); }).catch(() => {});
     }
     if (!wasOn) render();
   }
@@ -166,6 +186,145 @@
     flush().then(() => load());
   });
 
+  // ---------------- phone app: background GPS ----------------
+  const BG = NATIVE ? CAP.Plugins.BackgroundGeolocation : null;
+  const SETUP = NATIVE && CAP.Plugins.DriverSetup ? CAP.Plugins.DriverSetup : null;
+  const HTTP = NATIVE && CAP.Plugins.CapacitorHttp ? CAP.Plugins.CapacitorHttp : null;
+  const N = { watcher: null, queue: [], lastKept: null, sending: false, lastSendAt: 0, phone: null, skipBattery: false, lastErr: '' };
+  try { N.queue = JSON.parse(localStorage.getItem('summit_gps_queue') || '[]').slice(-500); } catch { N.queue = []; }
+  const saveQueue = () => { try { localStorage.setItem('summit_gps_queue', JSON.stringify(N.queue.slice(-500))); } catch { /* ignore */ } };
+
+  async function phoneStatus() {
+    if (!SETUP) return null;
+    try { N.phone = await SETUP.status({}); } catch { N.phone = null; }
+    return N.phone;
+  }
+  function setupMissing() {
+    const p = N.phone;
+    if (!p) return [];
+    const miss = [];
+    if (!p.locationPermission) miss.push('perm');
+    if (!p.locationOn) miss.push('gps');
+    if (!p.batteryOk && !N.skipBattery) miss.push('battery');
+    if (!p.notificationsOk) miss.push('notif');
+    return miss;
+  }
+  const blocking = () => setupMissing().filter((k) => k === 'perm' || k === 'gps' || k === 'battery');
+
+  function startNativeGps() {
+    if (N.watcher != null) return;
+    N.watcher = 'starting';
+    try {
+      const id = BG.addWatcher({
+        backgroundTitle: 'Ruta en curso',
+        backgroundMessage: 'Compartiendo tu ubicación con la oficina',
+        requestPermissions: true,
+        stale: false,
+        distanceFilter: 10,
+      }, onNativePos);
+      Promise.resolve(id).then((v) => { N.watcher = v; try { localStorage.setItem('summit_gps_watcher', v); } catch { /* ignore */ } });
+    } catch (e) { N.watcher = null; N.lastErr = String(e && e.message || e); }
+    keepAwake();
+  }
+  function stopNativeGps() {
+    const id = N.watcher;
+    N.watcher = null; S.gpsOn = false;
+    if (id && id !== 'starting') { try { BG.removeWatcher({ id }); } catch { /* ignore */ } }
+    try { localStorage.removeItem('summit_gps_watcher'); } catch { /* ignore */ }
+  }
+  function onNativePos(loc, err) {
+    if (err) {
+      S.gpsOn = false;
+      N.lastErr = err.message || 'error';
+      if (err.code === 'NOT_AUTHORIZED') { N.watcher = null; phoneStatus().then(render); }
+      render();
+      return;
+    }
+    if (!loc) return;
+    const wasOn = S.gpsOn;
+    S.gpsOn = true; S.gpsDenied = false;
+    const c = { latitude: loc.latitude, longitude: loc.longitude };
+    const t = loc.time || Date.now();
+    const k = N.lastKept;
+    if (!k || C_dist(k, c) > 25 || t - k.t > 60000) {
+      N.lastKept = { ...c, t };
+      S.lastSent = { ...c, t };
+      N.queue.push({ lat: +loc.latitude.toFixed(6), lng: +loc.longitude.toFixed(6), acc: loc.accuracy != null ? Math.round(loc.accuracy) : null,
+        speed: loc.speed != null ? +loc.speed.toFixed(1) : null, heading: loc.bearing != null ? Math.round(loc.bearing) : null, at: t });
+      saveQueue();
+    }
+    const moved = N.lastSentPos ? C_dist(N.lastSentPos, c) : Infinity;
+    if (N.queue.length && (Date.now() - N.lastSendAt > 30000 || moved > 300)) sendNativeQueue();
+    if (!wasOn) render();
+  }
+  async function sendNativeQueue() {
+    if (!N.queue.length) return;
+    if (N.sending) { N.again = true; return; }
+    N.sending = true; N.again = false;
+    N.lastSendAt = Date.now();
+    const batch = N.queue.slice(0, 200);
+    const r = activeRoute();
+    const body = { points: batch, route_id: r ? r.id : null, app: N.phone ? { version: N.phone.version, sdk: N.phone.sdk, make: N.phone.manufacturer, battery_ok: N.phone.batteryOk } : null };
+    try {
+      let status, data;
+      if (HTTP) {
+        const res = await HTTP.request({ url: location.origin + API + '/positions', method: 'POST', headers: { 'Content-Type': 'application/json' }, data: body, connectTimeout: 15000, readTimeout: 15000 });
+        status = res.status; data = res.data;
+      } else {
+        const res = await fetch(API + '/positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        status = res.status; data = await res.json().catch(() => ({}));
+      }
+      if (status >= 200 && status < 300) {
+        N.queue.splice(0, batch.length);
+        const last = batch[batch.length - 1];
+        N.lastSentPos = { latitude: last.lat, longitude: last.lng };
+        saveQueue();
+        if (data && data.changed && !document.hidden) load();
+      } else if (status === 401) {
+        stopNativeGps();
+      } else if (status >= 400 && status < 500) {
+        N.queue.splice(0, batch.length); saveQueue(); // bad data: drop it
+      }
+    } catch { /* no signal: keep the points and try later */ }
+    N.sending = false;
+    if (N.queue.length && (N.again || N.queue.length > 200) && N.lastSentPos) setTimeout(sendNativeQueue, 1000);
+  }
+  if (NATIVE) setInterval(() => { if (N.queue.length) sendNativeQueue(); }, 45000);
+
+  function setupCard() {
+    if (!NATIVE || !N.phone) return '';
+    const miss = setupMissing();
+    if (!miss.length) return '';
+    const items = {
+      perm: ['Permiso de ubicación', 'Toca y elige “Mientras se usa la app” y “Ubicación precisa”.', 'Permitir'],
+      gps: ['Ubicación del teléfono', 'La ubicación (GPS) del teléfono está apagada.', 'Encender'],
+      battery: ['Batería sin restricción', 'Para que el teléfono no apague la app cuando usas Google Maps. Toca “Permitir”.', 'Arreglar'],
+      notif: ['Notificaciones', 'Para ver que la ruta está activa y recibir avisos.', 'Permitir'],
+    };
+    return `<div class="card" style="margin-bottom:10px;border:2px solid var(--orange)"><h3 style="margin-top:0">Antes de empezar</h3>
+      <p class="small muted" style="margin-top:4px">La oficina necesita ver dónde vas, también cuando usas Google Maps o Waze.</p>
+      ${miss.map((k) => `<div class="row" style="padding:10px 0;border-top:1px solid var(--line)"><div class="grow"><b>${items[k][0]}</b><div class="small muted">${items[k][1]}</div></div>
+        <button class="btn-sm btn-primary" data-fix="${k}">${items[k][2]}</button></div>`).join('')}
+      ${miss.includes('battery') && N.triedBattery ? '<button class="btn-sm btn-ghost" data-fix="skip-battery" style="margin-top:6px">Mi teléfono no tiene esta opción</button>' : ''}
+    </div>`;
+  }
+  async function fixSetting(k) {
+    try {
+      if (k === 'perm') {
+        const before = N.phone && N.phone.locationPermission;
+        const st = await SETUP.requestLocation({});
+        if (!st.locationPermission && !before) await SETUP.openAppSettings({});
+      } else if (k === 'gps') await SETUP.openLocationSettings({});
+      else if (k === 'battery') { N.triedBattery = true; await SETUP.requestBattery({}); }
+      else if (k === 'notif') await SETUP.requestNotifications({});
+      else if (k === 'skip-battery') N.skipBattery = true;
+    } catch (e) { toast(e.message || 'No se pudo abrir', true); }
+    await phoneStatus();
+    render();
+  }
+  // Back from the phone settings: check again.
+  document.addEventListener('visibilitychange', () => { if (NATIVE && !document.hidden) phoneStatus().then(() => { render(); if (activeRoute() && !blocking().length) startGps(); }); });
+
   // ---------------- render ----------------
   function render() {
     const main = $('#main');
@@ -173,19 +332,25 @@
     if (!d) return;
     const routes = d.routes;
     let html = `<div class="row" style="margin:2px 2px 12px"><div class="grow"><div class="muted small">${esc(C.fmtDate(d.today, 'es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
-      <h2>Hola, ${esc(d.driver.name)}</h2></div><button class="btn-sm" id="bell">${icon('bell', 16)} Avisos</button></div>`;
+      <h2>Hola, ${esc(d.driver.name)}</h2></div>${NATIVE ? '' : `<button class="btn-sm" id="bell">${icon('bell', 16)} Avisos</button>`}</div>`;
 
     if (outbox.length) html += `<div class="banner">${icon('refresh')}<div class="grow">${outbox.length} ${outbox.length === 1 ? 'cambio pendiente' : 'cambios pendientes'} de enviar. Se enviarán cuando haya señal.</div><button class="btn-sm" id="retry">Enviar</button></div>`;
 
     const ar = activeRoute();
-    if (ar) {
+    html += setupCard();
+    if (ar && NATIVE) {
+      if (blocking().length) html += `<div class="banner">${icon('pin')}<div class="grow">La oficina no puede ver tu ubicación. Arregla lo de arriba.</div></div>`;
+      else if (!S.gpsOn) html += `<div class="banner">${icon('pin')}<div class="grow">Buscando señal GPS…</div><button class="btn-sm" id="gps">Reintentar</button></div>`;
+      else html += `<div class="banner ok">${icon('pin')}<div class="grow small">Ubicación activa. Puedes usar Google Maps o Waze; la app sigue enviando.${N.queue.length > 3 ? ` (${N.queue.length} puntos por enviar)` : ''}</div></div>`;
+    } else if (ar) {
       if (S.gpsDenied) html += `<div class="banner">${icon('pin')}<div class="grow">La ubicación está bloqueada. Actívala para esta página en los ajustes del teléfono.</div></div>`;
       else if (!S.gpsOn) html += `<div class="banner">${icon('pin')}<div class="grow">Ubicación apagada.</div><button class="btn-sm" id="gps">Activar</button></div>`;
       else html += `<div class="banner ok">${icon('pin')}<div class="grow small">Compartiendo tu ubicación mientras esta página está abierta.</div></div>`;
     }
 
-    if (S.installEvt) html += `<div class="banner info"><div class="grow">Instala la app en tu teléfono para abrirla más rápido.</div><button class="btn-sm btn-primary" id="inst">Instalar</button></div>`;
-    else if (isIos() && !isStandalone()) html += `<div class="banner info small"><div class="grow">Para recibir avisos en iPhone: toca <b>Compartir</b> y luego <b>Agregar a inicio</b>, y abre la app desde ahí.</div></div>`;
+    if (!NATIVE && isAndroid) html += `<div class="banner info"><div class="grow small">Instala la app <b>Summit Chofer</b> para que la oficina vea dónde vas mientras usas Google Maps.</div><a class="btn btn-sm btn-primary" href="/app.apk">Descargar</a></div>`;
+    else if (S.installEvt) html += `<div class="banner info"><div class="grow">Instala la app en tu teléfono para abrirla más rápido.</div><button class="btn-sm btn-primary" id="inst">Instalar</button></div>`;
+    else if (!NATIVE && isIos() && !isStandalone()) html += `<div class="banner info small"><div class="grow">Para recibir avisos en iPhone: toca <b>Compartir</b> y luego <b>Agregar a inicio</b>, y abre la app desde ahí.</div></div>`;
 
     if (!routes.length) {
       html += `<div class="card empty"><h3>No tienes ruta para hoy</h3>${d.upcoming.length ? `<p>Próximas rutas:</p>${d.upcoming.map((u) => `<div>${esc(C.fmtDate(u.date, 'es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))} · ${u.stops} paradas</div>`).join('')}` : '<p class="muted">Cuando la oficina te asigne una ruta aparecerá aquí.</p>'}</div>`;
@@ -267,14 +432,19 @@
     if ($('#retry')) $('#retry').onclick = (e) => busy(e.currentTarget, () => flush());
     if ($('#gps')) $('#gps').onclick = () => startGps();
     if ($('#inst')) $('#inst').onclick = async () => { const ev = S.installEvt; S.installEvt = null; ev.prompt(); render(); };
-    $('#bell').onclick = () => alertsSheet();
+    if ($('#bell')) $('#bell').onclick = () => alertsSheet();
+    $$('[data-fix]', m).forEach((b) => b.onclick = () => busy(b, () => fixSetting(b.dataset.fix)));
     $$('[data-start]', m).forEach((b) => b.onclick = () => busy(b, async () => {
+      if (NATIVE) {
+        await phoneStatus();
+        if (blocking().length) { render(); window.scrollTo({ top: 0, behavior: 'smooth' }); return toast('Primero arregla la ubicación (arriba)', true); }
+      }
       try {
         await C.api(`${API}/routes/${b.dataset.start}/start`, { method: 'POST', body: {} });
         startGps();
         await load();
         toast('¡Buen viaje!');
-        if (C.pushSupported() && Notification.permission === 'default') alertsSheet();
+        if (!NATIVE && C.pushSupported() && Notification.permission === 'default') alertsSheet();
       } catch (e) { toast(e.message, true); }
     }));
     $$('[data-expand]', m).forEach((el) => el.onclick = () => { S.expanded.add(Number(el.dataset.expand)); render(); });
@@ -385,6 +555,7 @@
   }
 
   function grabPosition() {
+    if (NATIVE) { sendNativeQueue(); return; }
     if (!('geolocation' in navigator) || S.gpsDenied) return;
     navigator.geolocation.getCurrentPosition((p) => { S.lastSent = null; onPos(p); }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 });
   }
@@ -419,7 +590,7 @@
         .bindPopup(`<b>${esc(x.name)}</b><br>${esc(x.address)}<br><a href="${C.navUrl(x)}" target="_blank" rel="noopener">Navegar</a>`).addTo(map);
       pts.push([x.lat, x.lng]);
     }));
-    if (S.lastSent) {
+    if (S.lastSent && S.lastSent.latitude != null) {
       L.marker([S.lastSent.latitude, S.lastSent.longitude], { icon: L.divIcon({ className: '', html: `<div class="truck-pin">${C.truckSvg}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }) }).addTo(map);
       pts.push([S.lastSent.latitude, S.lastSent.longitude]);
     }
@@ -433,11 +604,16 @@
 
   // ---------------- start ----------------
   (async () => {
-    C.registerSW();
+    if (!NATIVE) C.registerSW();
+    if (NATIVE) {
+      await phoneStatus();
+      // A watcher left over from before a reload keeps running natively: stop it, we start a fresh one.
+      try { const old = localStorage.getItem('summit_gps_watcher'); if (old) { localStorage.removeItem('summit_gps_watcher'); await BG.removeWatcher({ id: old }); } } catch { /* ignore */ }
+    }
     await refreshOutbox();
     if (outbox.length) { await flush(); }
     await load(true);
-    if (activeRoute()) startGps();
+    if (activeRoute() && !(NATIVE && blocking().length)) startGps();
     setInterval(() => { if (!document.hidden && !$$('.sheet-backdrop').length) load(); }, 60000);
   })();
 })();

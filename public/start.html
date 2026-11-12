@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f3d63">
+  <title>Summit Chofer</title>
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    main { max-width: 520px; padding-top: 24px; }
+    .logo { width: 72px; height: 72px; border-radius: 18px; display: block; margin: 8px auto 12px; }
+    h1 { text-align: center; font-size: 24px; margin: 0 0 4px; }
+    .lead { text-align: center; margin: 0 0 18px; }
+    textarea { min-height: 90px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <main id="main">
+    <img class="logo" src="/icons/icon-192.png" alt="">
+    <h1>Summit Chofer</h1>
+    <p class="lead muted">Pega aquí el enlace que te mandó la oficina.</p>
+    <form class="card" id="f">
+      <label class="field"><span>Tu enlace de chofer</span>
+        <textarea id="link" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/d/…"></textarea></label>
+      <button type="button" class="btn-block" id="paste" style="margin-bottom:8px">Pegar</button>
+      <button type="submit" class="btn-primary btn-block btn-lg">Entrar</button>
+      <p class="small muted" id="msg" style="margin:10px 0 0"></p>
+    </form>
+  </main>
+  <script src="/start.js"></script>
+</body>
+</html>

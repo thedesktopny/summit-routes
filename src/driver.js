@@ -1,6 +1,107 @@
 // Driver API. Every call is authorised by the driver's private link token.
 import { HttpError, json, readJson, randId, cleanStr, getSettings, todayIn, logEvent } from './lib.js';
 import { recomputeRoute, checkRouteFinished } from './routes.js';
+import { haversine } from './geo.js';
+
+// Auto arrive / depart tuning (metres, metres per second)
+const ARRIVE_RADIUS = 120;      // close enough to count as "at the stop"
+const ARRIVE_RADIUS_NOSPEED = 60;
+const ARRIVE_MAX_SPEED = 3.5;   // about 8 mph: slowing down / parked
+const DEPART_RADIUS = 250;      // left the stop
+const MAX_ACCURACY = 100;       // ignore fuzzy fixes for arrive/depart
+const ETA_EVERY_MS = 3 * 60 * 1000;
+
+// Save GPS points, update the driver's live position, auto-mark arrivals/departures, refresh ETAs.
+export async function ingestPositions(env, ctx, driver, raw, routeHint) {
+  const now = Date.now();
+  const pts = [];
+  for (const b of raw || []) {
+    if (!b || typeof b !== 'object') continue;
+    const lat = num(b.lat), lng = num(b.lng);
+    if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) continue;
+    let at = num(b.at) || now;
+    if (at > now) at = now;
+    if (at < now - 2 * 24 * 3600 * 1000) continue;
+    const speed = num(b.speed);
+    pts.push({ lat, lng, acc: num(b.acc), speed: speed != null && speed >= 0 ? speed : null, heading: num(b.heading), at });
+  }
+  if (!pts.length) return { saved: 0, changed: false };
+  pts.sort((a, b) => a.at - b.at);
+
+  // Which route these points belong to: the one the phone says, else the driver's active route.
+  let route = null;
+  const hint = Number(routeHint);
+  if (Number.isInteger(hint) && hint > 0) {
+    route = await env.DB.prepare('SELECT id, status, last_eta_at FROM routes WHERE id = ? AND driver_id = ?').bind(hint, driver.id).first();
+  }
+  if (!route || route.status !== 'active') {
+    const act = await env.DB.prepare(`SELECT id, status, last_eta_at FROM routes WHERE driver_id = ? AND status = 'active' ORDER BY started_at DESC LIMIT 1`).bind(driver.id).first();
+    if (act) route = act;
+  }
+  const routeId = route ? route.id : null;
+
+  const last = pts[pts.length - 1];
+  const stmts = pts.map(p => env.DB.prepare('INSERT INTO positions (driver_id, route_id, lat, lng, acc, speed, heading, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(driver.id, routeId, p.lat, p.lng, p.acc, p.speed, p.heading, p.at));
+  stmts.push(env.DB.prepare('UPDATE drivers SET last_lat = ?, last_lng = ?, last_acc = ?, last_pos_at = ? WHERE id = ? AND (last_pos_at IS NULL OR last_pos_at <= ?)')
+    .bind(last.lat, last.lng, last.acc, last.at, driver.id, last.at));
+  if (routeId) stmts.push(env.DB.prepare('UPDATE routes SET gps_alert_at = NULL WHERE id = ? AND gps_alert_at IS NOT NULL').bind(routeId));
+  await env.DB.batch(stmts);
+
+  if (!route || route.status !== 'active') return { saved: pts.length, changed: false };
+
+  // ---- auto arrive / depart ----
+  const { results: stops } = await env.DB.prepare(`SELECT id, name, lat, lng, status, arrived_at, departed_at, arrive_source FROM stops
+    WHERE route_id = ? AND lat IS NOT NULL AND lng IS NOT NULL`).bind(routeId).all();
+  const updates = [];
+  const events = [];
+  const state = new Map(stops.map(s => [s.id, { ...s }]));
+  for (const p of pts) {
+    if (p.acc != null && p.acc > MAX_ACCURACY) continue;
+    // Arrival: nearest pending stop within the radius while slow.
+    let best = null, bestD = Infinity;
+    for (const s of state.values()) {
+      if (s.status !== 'pending') continue;
+      const d = haversine(p, s);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    const slow = p.speed == null ? bestD <= ARRIVE_RADIUS_NOSPEED : p.speed <= ARRIVE_MAX_SPEED;
+    if (best && bestD <= ARRIVE_RADIUS && slow) {
+      best.status = 'arrived'; best.arrived_at = p.at; best.departed_at = null; best.arrive_source = 'gps';
+      updates.push(env.DB.prepare(`UPDATE stops SET status = 'arrived', arrived_at = ?, departed_at = NULL, arrive_source = 'gps', updated_at = ? WHERE id = ? AND status = 'pending'`)
+        .bind(p.at, now, best.id));
+      events.push({ stop_id: best.id, type: 'arrived', detail: 'GPS' });
+    }
+    // Departure: a stop we were at, now far away.
+    for (const s of state.values()) {
+      if (!s.arrived_at || s.departed_at || s.status === 'pending') continue;
+      if (p.at <= s.arrived_at) continue;
+      if (haversine(p, s) > DEPART_RADIUS) {
+        // Only drove past (GPS said arrived, stayed under 3 min, nothing marked): undo the arrival.
+        if (s.status === 'arrived' && s.arrive_source === 'gps' && p.at - s.arrived_at < 3 * 60 * 1000) {
+          s.status = 'pending'; s.arrived_at = null; s.departed_at = null; s.arrive_source = '';
+          updates.push(env.DB.prepare(`UPDATE stops SET status = 'pending', arrived_at = NULL, departed_at = NULL, arrive_source = '', updated_at = ? WHERE id = ? AND status = 'arrived'`).bind(now, s.id));
+          events.push({ stop_id: s.id, type: 'passed_by', detail: 'GPS' });
+          continue;
+        }
+        s.departed_at = p.at;
+        updates.push(env.DB.prepare('UPDATE stops SET departed_at = ?, updated_at = ? WHERE id = ? AND departed_at IS NULL').bind(p.at, now, s.id));
+        events.push({ stop_id: s.id, type: 'departed', detail: s.status === 'arrived' ? 'not marked yet' : '' });
+      }
+    }
+  }
+  if (updates.length) {
+    await env.DB.batch(updates);
+    for (const e of events) await logEvent(env, { route_id: routeId, driver_id: driver.id, ...e });
+  }
+
+  // ---- live ETAs from where the driver really is ----
+  if (updates.length || !route.last_eta_at || now - route.last_eta_at > ETA_EVERY_MS) {
+    await env.DB.prepare('UPDATE routes SET last_eta_at = ? WHERE id = ?').bind(now, routeId).run();
+    ctx.waitUntil(recomputeRoute(env, routeId).catch(e => console.log('eta failed', e && e.message)));
+  }
+  return { saved: pts.length, changed: updates.length > 0 };
+}
 import { notify, saveSubscription } from './push.js';
 
 export async function findDriver(env, token) {
@@ -48,7 +149,7 @@ export async function driverApi(req, env, ctx, url, token, sub) {
     const out = [];
     for (const r of routes) {
       const [stops, photos] = await env.DB.batch([
-        env.DB.prepare('SELECT id, seq, name, address, phone, notes, lat, lng, status, eta, arrived_at, done_at, fail_reason, driver_note, received_by FROM stops WHERE route_id = ? ORDER BY seq, id').bind(r.id),
+        env.DB.prepare('SELECT id, seq, name, address, phone, notes, lat, lng, status, eta, arrived_at, departed_at, arrive_source, done_at, fail_reason, driver_note, received_by FROM stops WHERE route_id = ? ORDER BY seq, id').bind(r.id),
         env.DB.prepare('SELECT id, stop_id FROM photos WHERE route_id = ? ORDER BY created_at').bind(r.id),
       ]);
       const pm = {};
@@ -80,27 +181,28 @@ export async function driverApi(req, env, ctx, url, token, sub) {
 
   if (sub === '/position' && method === 'POST') {
     const b = await readJson(req);
-    const lat = num(b.lat), lng = num(b.lng);
-    if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new HttpError(400, 'Ubicación inválida');
-    let routeId = b.route_id ? intId(b.route_id) : null;
-    if (routeId) {
-      const r = await env.DB.prepare('SELECT id FROM routes WHERE id = ? AND driver_id = ?').bind(routeId, driver.id).first();
-      if (!r) routeId = null;
+    const r = await ingestPositions(env, ctx, driver, [b], b.route_id);
+    if (!r.saved) throw new HttpError(400, 'Ubicación inválida');
+    return json({ ok: true, changed: r.changed });
+  }
+
+  // Phone app: several points at once (sent from the background).
+  if (sub === '/positions' && method === 'POST') {
+    const b = await readJson(req);
+    const pts = Array.isArray(b.points) ? b.points.slice(-300) : [];
+    const r = await ingestPositions(env, ctx, driver, pts, b.route_id);
+    if (b.app && typeof b.app === 'object') {
+      const ver = cleanStr(String(b.app.version || ''), 40);
+      const info = cleanStr(JSON.stringify(b.app), 400);
+      ctx.waitUntil(env.DB.prepare('UPDATE drivers SET app_version = ?, app_info = ? WHERE id = ?').bind(ver, info, driver.id).run());
     }
-    const at = Math.min(num(b.at) || now, now);
-    await env.DB.batch([
-      env.DB.prepare('INSERT INTO positions (driver_id, route_id, lat, lng, acc, speed, heading, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(driver.id, routeId, lat, lng, num(b.acc), num(b.speed), num(b.heading), at),
-      env.DB.prepare('UPDATE drivers SET last_lat = ?, last_lng = ?, last_acc = ?, last_pos_at = ? WHERE id = ? AND (last_pos_at IS NULL OR last_pos_at <= ?)')
-        .bind(lat, lng, num(b.acc), at, driver.id, at),
-    ]);
-    return json({ ok: true });
+    return json({ ok: true, saved: r.saved, changed: r.changed });
   }
 
   if ((m = sub.match(/^\/stops\/(\d+)\/arrive$/)) && method === 'POST') {
     const st = await myStop(env, driver, intId(m[1]));
     if (st.status === 'pending') {
-      await env.DB.prepare(`UPDATE stops SET status = 'arrived', arrived_at = ?, updated_at = ? WHERE id = ?`).bind(now, now, st.id).run();
+      await env.DB.prepare(`UPDATE stops SET status = 'arrived', arrived_at = ?, arrive_source = 'manual', updated_at = ? WHERE id = ?`).bind(now, now, st.id).run();
       await startRouteIfNeeded(env, st.route_id, driver);
       await logEvent(env, { route_id: st.route_id, stop_id: st.id, driver_id: driver.id, type: 'arrived' });
     }
@@ -169,7 +271,7 @@ export async function driverApi(req, env, ctx, url, token, sub) {
   if ((m = sub.match(/^\/stops\/(\d+)\/undo$/)) && method === 'POST') {
     const st = await myStop(env, driver, intId(m[1]));
     if (st.status === 'pending') return json({ ok: true });
-    await env.DB.prepare(`UPDATE stops SET status = 'pending', done_at = NULL, arrived_at = NULL, fail_reason = '', updated_at = ? WHERE id = ?`).bind(now, st.id).run();
+    await env.DB.prepare(`UPDATE stops SET status = 'pending', done_at = NULL, arrived_at = NULL, departed_at = NULL, arrive_source = '', fail_reason = '', updated_at = ? WHERE id = ?`).bind(now, st.id).run();
     await logEvent(env, { route_id: st.route_id, stop_id: st.id, driver_id: driver.id, type: 'undone' });
     await checkRouteFinished(env, st.route_id, origin);
     ctx.waitUntil(recomputeRoute(env, st.route_id));

@@ -25,3 +25,13 @@ Delivery routes for Summit Safety: the office plans routes and the drivers follo
 - `src/push.js`: phone/computer alerts (Web Push)
 - `src/lib.js`: shared helpers and the database tables
 - `public/`: the office and driver pages
+
+## Driver phone app (Android)
+
+Folder `android-app/` is a small Android app ("Summit Chofer") that opens the driver page and keeps sending GPS in the background, also while the driver uses Google Maps or Waze.
+
+- GitHub builds it automatically (`.github/workflows/android.yml`) whenever something in `android-app/` changes, or by hand: GitHub → Actions → "Build driver app (APK)" → Run workflow.
+- The finished app is saved to `public/summit-chofer.apk` and served at `/app.apk`.
+- Drivers: install from `/app.apk`, open it, paste their driver link, allow location / battery / notifications.
+- The server marks a stop **Arrived** by itself when the driver is within ~120 m and slow, records when they **left**, refreshes ETAs with live traffic every ~3 minutes, and alerts the office if an active driver sends no GPS for 10 minutes.
+- The signing key is `android-app/android/app/summit-chofer.jks`. Keep it: updates only install over the old app if they are signed with the same key.

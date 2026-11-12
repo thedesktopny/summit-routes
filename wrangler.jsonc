@@ -15,7 +15,7 @@
     "not_found_handling": "none"
   },
   // Daily clean-up of old GPS points (keeps 90 days).
-  "triggers": { "crons": ["17 9 * * *"] },
+  "triggers": { "crons": ["17 9 * * *", "*/5 * * * *"] },
   "d1_databases": [
     { "binding": "DB", "database_name": "summit-routes-db" }
   ],

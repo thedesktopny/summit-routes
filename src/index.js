@@ -1,8 +1,10 @@
 // Summit Safety Routes — Cloudflare Worker entry point.
-import { HttpError, json, ensureSchema } from './lib.js';
+import { HttpError, json, ensureSchema, getSetting, setSetting, getSettings, todayIn, logEvent } from './lib.js';
 import { adminApi, adminState, adminSetup, adminLogin, adminLogout, requireAdmin } from './admin.js';
 import { driverApi, findDriver } from './driver.js';
-import { getVapid } from './push.js';
+import { getVapid, notify } from './push.js';
+
+let originSaved = false;
 
 const HTML_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
@@ -45,6 +47,24 @@ export default {
 
       if (path === '/' || path === '/index.html') return Response.redirect(new URL('/admin', url), 302);
       if (path === '/admin' || path === '/admin/') return await serveAsset(env, url, '/admin.html');
+
+      // Remember the public address so scheduled alerts can link back to it.
+      if (!originSaved && (path.startsWith('/api/') || path.startsWith('/d/'))) {
+        originSaved = true;
+        ctx.waitUntil(getSetting(env, 'public_origin').then(o => (o === url.origin ? null : setSetting(env, 'public_origin', url.origin))));
+      }
+
+      // Phone app: start page and download
+      if (path === '/app' || path === '/app/') return await serveAsset(env, url, '/start.html');
+      if (path === '/app.apk' || path === '/summit-chofer.apk') {
+        const res = await env.ASSETS.fetch(new Request(new URL('/summit-chofer.apk', url.origin)));
+        if (!res.ok) return new Response('La app todavía no está lista. Intenta en unos minutos.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        return new Response(res.body, { headers: {
+          'content-type': 'application/vnd.android.package-archive',
+          'content-disposition': 'attachment; filename="summit-chofer.apk"',
+          'cache-control': 'no-cache',
+        } });
+      }
 
       // Driver page and its per-driver install manifest
       let m = path.match(/^\/d\/([A-Za-z0-9]{16,40})\/?$/);
@@ -124,8 +144,39 @@ export default {
 
   async scheduled(event, env, ctx) {
     await ensureSchema(env);
+    if (event.cron !== '17 9 * * *') { await gpsWatch(env); return; }
     const cutoff = Date.now() - 90 * 24 * 3600 * 1000;
     await env.DB.prepare('DELETE FROM positions WHERE at < ?').bind(cutoff).run();
     await env.DB.prepare('DELETE FROM login_attempts WHERE first_at < ?').bind(Date.now() - 24 * 3600 * 1000).run();
   },
 };
+
+// Every few minutes: tell the office when a driver on an active route has stopped sending GPS.
+const GPS_SILENT_MS = 10 * 60 * 1000;
+async function gpsWatch(env) {
+  const now = Date.now();
+  const s = await getSettings(env);
+  const today = todayIn(s.timezone);
+  const { results } = await env.DB.prepare(`SELECT r.id, r.name, r.driver_id, r.started_at, r.gps_alert_at, d.name AS driver_name, d.last_pos_at
+    FROM routes r JOIN drivers d ON d.id = r.driver_id
+    WHERE r.status = 'active' AND r.date = ?
+      AND EXISTS (SELECT 1 FROM stops s WHERE s.route_id = r.id AND s.status IN ('pending','arrived'))`).bind(today).all();
+  if (!results.length) return;
+  const origin = (await getSetting(env, 'public_origin')) || 'https://example.com';
+  for (const r of results) {
+    const lastSeen = Math.max(r.last_pos_at || 0, r.started_at || 0);
+    if (now - lastSeen < GPS_SILENT_MS) continue;
+    if (r.gps_alert_at && now - r.gps_alert_at < 60 * 60 * 1000) continue;
+    await env.DB.prepare('UPDATE routes SET gps_alert_at = ? WHERE id = ?').bind(now, r.id).run();
+    const mins = Math.round((now - lastSeen) / 60000);
+    await logEvent(env, { route_id: r.id, driver_id: r.driver_id, type: 'gps_silent', detail: `${mins} min` });
+    await notify(env, {
+      kind: 'admin', subject: origin,
+      payload: { title: `No GPS — ${r.driver_name}`, body: `No location for ${mins} min. The app may be closed or the phone off.`, url: `/admin#route/${r.id}`, tag: `gps-${r.id}` },
+    });
+    await notify(env, {
+      kind: 'driver', driverId: r.driver_id, subject: origin,
+      payload: { title: 'Ubicación apagada', body: 'La oficina no ve dónde estás. Abre la app Summit Chofer.', url: '/app', tag: `gps-${r.id}` },
+    });
+  }
+}

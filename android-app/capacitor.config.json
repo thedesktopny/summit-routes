@@ -1,0 +1,17 @@
+{
+  "appId": "com.summitsafety.chofer",
+  "appName": "Summit Chofer",
+  "webDir": "www",
+  "server": {
+    "url": "https://summit-routes.orders-883.workers.dev/app",
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "useLegacyBridge": true,
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": false }
+  }
+}

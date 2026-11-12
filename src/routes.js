@@ -60,7 +60,8 @@ export async function recomputeRoute(env, routeId, { optimize = false } = {}) {
   if (ret && start && ordered.length) linePts.push(start);
   let legs = null, line = null, distance = 0, duration = 0;
   if (linePts.length >= 2) {
-    const rl = await routeLine(linePts, settings.mapbox_token);
+    let rl = await routeLine(linePts, settings.mapbox_token, route.status === 'active' ? 'driving-traffic' : 'driving');
+    if (!rl && route.status === 'active') rl = await routeLine(linePts, settings.mapbox_token);
     if (rl) { legs = rl.legs; line = rl.line; }
     else {
       const mx = await travelMatrix(linePts, '');
@@ -87,9 +88,9 @@ export async function recomputeRoute(env, routeId, { optimize = false } = {}) {
   const stmts = finalOrder.map((s, i) => env.DB.prepare('UPDATE stops SET seq = ?, eta = ? WHERE id = ?')
     .bind(i + 1, etas.has(s.id) ? etas.get(s.id) : (s.status === 'done' || s.status === 'failed' ? s.eta : null), s.id));
   stmts.push(env.DB.prepare(`UPDATE routes SET geometry = ?, distance_m = ?, duration_s = ?, optimized_at = CASE WHEN ? THEN ? ELSE optimized_at END,
-      start_lat = ?, start_lng = ?, updated_at = ? WHERE id = ?`)
+      start_lat = ?, start_lng = ?, last_eta_at = ?, updated_at = ? WHERE id = ?`)
     .bind(line ? JSON.stringify(line) : null, Math.round(distance), Math.round(duration + ordered.length * settings.service_minutes * 60),
-      optimize ? 1 : 0, now, start ? start.lat : null, start ? start.lng : null, now, routeId));
+      optimize ? 1 : 0, now, start ? start.lat : null, start ? start.lng : null, now, now, routeId));
   await env.DB.batch(stmts);
   return { optimized: optimize, stops: finalOrder.length, unlocated: openNoPos.length };
 }

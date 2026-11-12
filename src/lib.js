@@ -190,6 +190,22 @@ export async function ensureSchema(env) {
     `CREATE TABLE IF NOT EXISTS login_attempts (ip TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at INTEGER NOT NULL)`,
   ];
   await env.DB.batch(stmts.map(s => env.DB.prepare(s)));
+  // Columns added after the first release (phone app / live GPS).
+  const want = {
+    stops: { departed_at: 'INTEGER', arrive_source: "TEXT DEFAULT ''" },
+    routes: { last_eta_at: 'INTEGER', gps_alert_at: 'INTEGER' },
+    drivers: { app_version: "TEXT DEFAULT ''", app_info: "TEXT DEFAULT ''" },
+  };
+  for (const [table, cols] of Object.entries(want)) {
+    const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all();
+    const have = new Set(results.map(r => r.name));
+    for (const [col, type] of Object.entries(cols)) {
+      if (!have.has(col)) {
+        try { await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`).run(); } catch (e) { /* added by a parallel request */ }
+      }
+    }
+  }
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS positions_driver ON positions(driver_id, at)').run();
   schemaReady = true;
 }
 
