@@ -350,8 +350,9 @@
       else html += `<div class="banner ok">${icon('pin')}<div class="grow small">Compartiendo tu ubicación mientras esta página está abierta.</div></div>`;
     }
 
-    if (isIos() && !d.driver.ot) html += `<div class="banner info"><div class="grow small">Para que la oficina vea dónde vas mientras usas Google Maps, configura <b>OwnTracks</b> (gratis, 2 minutos).</div><a class="btn btn-sm btn-primary" href="/ot/${TOKEN}">Configurar</a></div>`;
-    else if (!NATIVE && isAndroid) html += `<div class="banner info"><div class="grow small">Instala la app <b>Summit Chofer</b> para que la oficina vea dónde vas mientras usas Google Maps.</div><a class="btn btn-sm btn-primary" href="/app.apk">Descargar</a></div>`;
+    const iphone = d.driver.phone_type === 'iphone' || (!d.driver.phone_type && isIos());
+    if (iphone && !d.driver.ot) html += `<div class="banner info"><div class="grow small">Para que la oficina vea dónde vas mientras usas Google Maps, configura <b>OwnTracks</b> (gratis, 2 minutos).</div><a class="btn btn-sm btn-primary" href="/ot/${TOKEN}">Configurar</a></div>`;
+    else if (!NATIVE && !iphone && (isAndroid || d.driver.phone_type === 'android')) html += `<div class="banner info"><div class="grow small">Instala la app <b>Summit Chofer</b> para que la oficina vea dónde vas mientras usas Google Maps.</div><a class="btn btn-sm btn-primary" href="/app.apk">Descargar</a></div>`;
     else if (S.installEvt) html += `<div class="banner info"><div class="grow">Instala la app en tu teléfono para abrirla más rápido.</div><button class="btn-sm btn-primary" id="inst">Instalar</button></div>`;
     else if (!NATIVE && isIos() && !isStandalone()) html += `<div class="banner info small"><div class="grow">Para recibir avisos en iPhone: toca <b>Compartir</b> y luego <b>Agregar a inicio</b>, y abre la app desde ahí.</div></div>`;
 
@@ -369,7 +370,7 @@
       html += `<div class="card" style="margin-bottom:10px"><div class="row"><h3 class="grow">${r.name ? esc(r.name) : 'Ruta de hoy'}${r.date !== d.today ? ` · ${esc(C.fmtDate(r.date, 'es-MX'))}` : ''}</h3>
           <span class="small muted">${done + failed}/${stops.length} listas</span></div>
         <div class="progress" style="margin-top:8px"><div class="p-done" style="width:${stops.length ? done / stops.length * 100 : 0}%"></div><div class="p-failed" style="width:${stops.length ? failed / stops.length * 100 : 0}%"></div></div>
-        ${r.status === 'planned' ? `<p class="small muted" style="margin:10px 0 0">${stops.length} paradas · salida ${esc(r.start_time)}${r.duration_s ? ` · aprox. ${C.fmtDuration(r.duration_s)}` : ''}</p>
+        ${r.status === 'planned' ? `<p class="small muted" style="margin:10px 0 0">${stops.length} paradas · salida ${esc(r.start_time)}${r.duration_s ? ` · aprox. ${C.fmtDuration(r.duration_s)}` : ''}${r.return_eta ? ` · regreso aprox. ${hora(r.return_eta)}` : ''}</p>
           <button class="btn-orange btn-block btn-lg" style="margin-top:12px" data-start="${r.id}">Comenzar ruta</button>` : ''}
         ${!open.length && stops.length ? `<div class="banner ok" style="margin:12px 0 0">${icon('check')} ¡Ruta terminada! Gracias.</div>` : ''}
       </div>`;

@@ -113,7 +113,7 @@ export async function getSettings(env) {
     depot_label: s.depot_label || '',
     default_start_time: s.default_start_time || '08:00',
     service_minutes: s.service_minutes ? Number(s.service_minutes) : 10,
-    return_to_depot: s.return_to_depot === '1',
+    return_to_depot: s.return_to_depot !== '0', // default: drivers come back to the office
     photo_required: s.photo_required !== '0',
     mapbox_token: s.mapbox_token || '',
     _raw: s,
@@ -193,8 +193,8 @@ export async function ensureSchema(env) {
   // Columns added after the first release (phone app / live GPS).
   const want = {
     stops: { departed_at: 'INTEGER', arrive_source: "TEXT DEFAULT ''" },
-    routes: { last_eta_at: 'INTEGER', gps_alert_at: 'INTEGER' },
-    drivers: { app_version: "TEXT DEFAULT ''", app_info: "TEXT DEFAULT ''", ot_seen_at: 'INTEGER' },
+    routes: { last_eta_at: 'INTEGER', gps_alert_at: 'INTEGER', return_eta: 'INTEGER' },
+    drivers: { app_version: "TEXT DEFAULT ''", app_info: "TEXT DEFAULT ''", ot_seen_at: 'INTEGER', phone_type: "TEXT DEFAULT ''" },
   };
   for (const [table, cols] of Object.entries(want)) {
     const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all();
@@ -206,6 +206,13 @@ export async function ensureSchema(env) {
     }
   }
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS positions_driver ON positions(driver_id, at)').run();
+  // One time: routes not finished yet now count the drive back to the office (unless turned off in Settings).
+  const mig = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'mig_return_default'`).first();
+  if (!mig) {
+    const cur = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'return_to_depot'`).first();
+    if (!cur || cur.value !== '0') await env.DB.prepare(`UPDATE routes SET return_to_depot = 1, optimized_at = optimized_at WHERE status != 'done'`).run();
+    await env.DB.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('mig_return_default', '1')`).run();
+  }
   schemaReady = true;
 }
 

@@ -83,14 +83,20 @@ export async function recomputeRoute(env, routeId, { optimize = false } = {}) {
     etas.set(s.id, Math.round(t));
     t += service;
   });
+  // Back at the office: after the last stop plus the drive home.
+  let returnEta = null;
+  if (ret && start && ordered.length && legs && legs.length > ordered.length - (start ? 0 : 1)) {
+    const back = legs[start ? ordered.length : ordered.length - 1];
+    if (back) returnEta = Math.round(t + back.duration * 1000);
+  }
 
   const finalOrder = [...finished.sort((a, b) => (a.done_at || 0) - (b.done_at || 0)), ...ordered, ...openNoPos];
   const stmts = finalOrder.map((s, i) => env.DB.prepare('UPDATE stops SET seq = ?, eta = ? WHERE id = ?')
     .bind(i + 1, etas.has(s.id) ? etas.get(s.id) : (s.status === 'done' || s.status === 'failed' ? s.eta : null), s.id));
   stmts.push(env.DB.prepare(`UPDATE routes SET geometry = ?, distance_m = ?, duration_s = ?, optimized_at = CASE WHEN ? THEN ? ELSE optimized_at END,
-      start_lat = ?, start_lng = ?, last_eta_at = ?, updated_at = ? WHERE id = ?`)
+      start_lat = ?, start_lng = ?, last_eta_at = ?, return_eta = ?, updated_at = ? WHERE id = ?`)
     .bind(line ? JSON.stringify(line) : null, Math.round(distance), Math.round(duration + ordered.length * settings.service_minutes * 60),
-      optimize ? 1 : 0, now, start ? start.lat : null, start ? start.lng : null, now, now, routeId));
+      optimize ? 1 : 0, now, start ? start.lat : null, start ? start.lng : null, now, returnEta, now, routeId));
   await env.DB.batch(stmts);
   return { optimized: optimize, stops: finalOrder.length, unlocated: openNoPos.length };
 }

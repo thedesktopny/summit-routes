@@ -144,7 +144,7 @@ export async function driverApi(req, env, ctx, url, token, sub) {
   if (sub === '/today' && method === 'GET') {
     const s = await getSettings(env);
     const today = todayIn(s.timezone);
-    const { results: routes } = await env.DB.prepare(`SELECT id, date, name, status, start_time, distance_m, duration_s, started_at, finished_at, return_to_depot
+    const { results: routes } = await env.DB.prepare(`SELECT id, date, name, status, start_time, distance_m, duration_s, started_at, finished_at, return_to_depot, return_eta
       FROM routes WHERE driver_id = ? AND (date = ? OR status = 'active') ORDER BY date, id`).bind(driver.id, today).all();
     const out = [];
     for (const r of routes) {
@@ -159,7 +159,7 @@ export async function driverApi(req, env, ctx, url, token, sub) {
     const { results: upcoming } = await env.DB.prepare(`SELECT r.date, COUNT(s.id) AS stops FROM routes r LEFT JOIN stops s ON s.route_id = r.id
       WHERE r.driver_id = ? AND r.date > ? AND r.status != 'done' GROUP BY r.date ORDER BY r.date LIMIT 7`).bind(driver.id, today).all();
     return json({
-      driver: { id: driver.id, name: driver.name, ot: !!driver.ot_seen_at, ot_link: owntracksLink(url.origin, driver, 2) },
+      driver: { id: driver.id, name: driver.name, phone_type: driver.phone_type || '', ot: !!driver.ot_seen_at, ot_link: owntracksLink(url.origin, driver, 2) },
       company: s.company_name,
       today,
       timezone: s.timezone,

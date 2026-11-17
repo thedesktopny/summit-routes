@@ -228,8 +228,8 @@ export async function adminApi(req, env, ctx, url) {
     const b = await readJson(req);
     const name = cleanStr(b.name, 80);
     if (!name) throw new HttpError(400, 'Enter the driver name');
-    const r = await env.DB.prepare('INSERT INTO drivers (name, phone, token, active, created_at) VALUES (?, ?, ?, 1, ?)')
-      .bind(name, cleanStr(b.phone, 40), randId(24), Date.now()).run();
+    const r = await env.DB.prepare('INSERT INTO drivers (name, phone, phone_type, token, active, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+      .bind(name, cleanStr(b.phone, 40), phoneType(b.phone_type), randId(24), Date.now()).run();
     return json({ driver: await env.DB.prepare('SELECT * FROM drivers WHERE id = ?').bind(r.meta.last_row_id).first() });
   }
   if ((m = p.match(/^\/drivers\/(\d+)$/)) && method === 'PATCH') {
@@ -241,7 +241,8 @@ export async function adminApi(req, env, ctx, url) {
     if (!name) throw new HttpError(400, 'Enter the driver name');
     const phone = b.phone !== undefined ? cleanStr(b.phone, 40) : d.phone;
     const active = b.active !== undefined ? (b.active ? 1 : 0) : d.active;
-    await env.DB.prepare('UPDATE drivers SET name = ?, phone = ?, active = ? WHERE id = ?').bind(name, phone, active, id).run();
+    const ptype = b.phone_type !== undefined ? phoneType(b.phone_type) : (d.phone_type || '');
+    await env.DB.prepare('UPDATE drivers SET name = ?, phone = ?, phone_type = ?, active = ? WHERE id = ?').bind(name, phone, ptype, active, id).run();
     if (!active) await env.DB.prepare(`DELETE FROM push_subs WHERE kind = 'driver' AND driver_id = ?`).bind(id).run();
     return json({ driver: await env.DB.prepare('SELECT * FROM drivers WHERE id = ?').bind(id).first() });
   }
@@ -618,3 +619,5 @@ async function copyStops(env, fromId, toId) {
   await env.DB.batch(results.map((s, i) => env.DB.prepare(`INSERT INTO stops (route_id, seq, customer_id, name, address, phone, notes, lat, lng, geo_label, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`).bind(toId, i + 1, s.customer_id, s.name, s.address, s.phone, s.notes, s.lat, s.lng, s.geo_label, now, now)));
 }
+
+function phoneType(v) { return v === 'android' || v === 'iphone' ? v : ''; }

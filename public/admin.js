@@ -256,7 +256,8 @@
         </div>
         <div class="row wrap small" style="margin-top:12px;gap:14px">
           <span><b>${stops.length}</b> stops</span><span><b>${done}</b> delivered</span>${failed ? `<span style="color:var(--red)"><b>${failed}</b> not delivered</span>` : ''}
-          ${r.duration_s ? `<span class="muted">${C.fmtDuration(r.duration_s)} · ${C.fmtMiles(r.distance_m)}</span>` : ''}
+          ${r.duration_s ? `<span class="muted">${C.fmtDuration(r.duration_s)} · ${C.fmtMiles(r.distance_m)}${r.return_to_depot ? ' incl. drive back' : ''}</span>` : ''}
+          ${r.return_eta && r.status !== 'done' ? `<span>Back at office ~<b>${t(r.return_eta)}</b></span>` : ''}
           ${r.status === 'active' && r.last_pos_at ? `<span class="muted">GPS ${C.ago(r.last_pos_at)}</span>` : ''}
         </div>
         <div class="row" style="margin-top:12px"><button class="btn-orange btn-block" id="send">${icon('send', 18)} Send to driver</button></div>`;
@@ -674,32 +675,59 @@
   }
 
   // ---------------- Drivers ----------------
+  const PHONE = { android: 'Android', iphone: 'iPhone' };
+  // Is GPS tracking set up on this driver's phone?
+  function trackingStatus(d) {
+    const isApp = d.app_version && !/OwnTracks/.test(d.app_version);
+    if (d.phone_type === 'android') return isApp ? { ok: true, text: `Summit Chofer app installed (${esc(d.app_version)})` } : { ok: false, text: 'App not installed yet' };
+    if (d.phone_type === 'iphone') return d.ot_seen_at ? { ok: true, text: 'OwnTracks connected' } : { ok: false, text: 'OwnTracks not set up yet' };
+    return { ok: false, text: 'Pick Android or iPhone (Edit)' };
+  }
+
   async function driversView(main) {
     main.innerHTML = `<div class="section-title" style="margin-top:4px"><h2>Drivers</h2><button class="btn-primary" id="add">${icon('plus')} Add driver</button></div>
-      <p class="muted small" style="margin-top:-4px">Android drivers install the <b>Summit Chofer</b> app and paste their private link once; iPhone drivers set up the free <b>OwnTracks</b> app from the link in the message. The app keeps sending GPS while they use Google Maps or Waze. If a phone is lost, make a new link — the old one stops working.</p>
-      <div class="row wrap" style="margin:-2px 0 12px"><a class="btn-sm btn" href="/app.apk">${icon('download', 16)} Download app (APK)</a></div>
+      <div class="card" style="margin-bottom:12px">
+        <h3 style="margin:0 0 6px">How live tracking works</h3>
+        <div class="grid2 small" style="gap:14px">
+          <div><b>Android</b><ol style="margin:6px 0 0;padding-left:18px">
+            <li>Add the driver and pick <b>Android</b>.</li>
+            <li>Tap <b>Send setup</b> — they get the app link and their personal link.</li>
+            <li>They install <b>Summit Chofer</b>, paste the link, allow location and battery.</li>
+            <li>Here it shows <span style="color:var(--green)">✓ App installed</span>. Done.</li></ol></div>
+          <div><b>iPhone</b><ol style="margin:6px 0 0;padding-left:18px">
+            <li>Add the driver and pick <b>iPhone</b>.</li>
+            <li>Tap <b>Send setup</b> — they get one link with the steps.</li>
+            <li>They install the free <b>OwnTracks</b> app, tap “Configurar”, allow location <b>Always</b>.</li>
+            <li>Here it shows <span style="color:var(--green)">✓ OwnTracks connected</span>. Done.</li></ol></div>
+        </div>
+        <p class="small muted" style="margin:10px 0 0">Location is only recorded from “Comenzar ruta” until the route is finished. If a phone is lost, tap <b>New link</b> — the old one stops working.</p>
+      </div>
       <div class="list" id="dl"></div>`;
     async function load() {
       await loadDrivers();
-      $('#dl').innerHTML = S.drivers.length ? S.drivers.map((d) => `<div class="card" data-id="${d.id}" style="${d.active ? '' : 'opacity:.6'}">
-        <div class="row"><div class="grow"><h3>${esc(d.name)} ${d.active ? '' : '<span class="chip">Off</span>'}</h3>
-          <div class="small muted">${d.phone ? esc(d.phone) + ' · ' : ''}last opened ${C.ago(d.last_seen_at)} · ${d.app_version ? `<b style="color:var(--green)">${/OwnTracks/.test(d.app_version) ? esc(d.app_version) : 'phone app ' + esc(d.app_version)}</b>` : 'no phone app yet'}${d.last_pos_at ? ` · GPS ${C.ago(d.last_pos_at)}` : ''}</div></div></div>
+      $('#dl').innerHTML = S.drivers.length ? S.drivers.map((d) => {
+        const ts = trackingStatus(d);
+        return `<div class="card" data-id="${d.id}" style="${d.active ? '' : 'opacity:.6'}">
+        <div class="row"><div class="grow"><h3>${esc(d.name)} ${d.phone_type ? `<span class="chip">${PHONE[d.phone_type]}</span>` : ''} ${d.active ? '' : '<span class="chip">Off</span>'}</h3>
+          <div class="small" style="margin-top:2px;color:${ts.ok ? 'var(--green)' : 'var(--orange)'}"><b>${ts.ok ? '✓' : '✗'} ${ts.text}</b></div>
+          <div class="small muted">${d.phone ? esc(d.phone) + ' · ' : ''}last opened ${C.ago(d.last_seen_at)}${d.last_pos_at ? ` · last GPS ${C.ago(d.last_pos_at)}` : ''}</div></div></div>
         <div class="row wrap" style="margin-top:10px">
-          ${d.active ? `<button class="btn-sm btn-primary" data-act="share">${icon('link', 16)} Share link</button>` : ''}
+          ${d.active ? `<button class="btn-sm btn-primary" data-act="share">${icon('send', 16)} Send setup</button>` : ''}
           <button class="btn-sm" data-act="edit">${icon('edit', 16)} Edit</button>
           ${d.active ? `<button class="btn-sm" data-act="newlink">New link</button>` : ''}
           <button class="btn-sm btn-ghost" data-act="toggle">${d.active ? 'Turn off' : 'Turn on'}</button>
-        </div></div>`).join('') : '<div class="card empty">No drivers yet.</div>';
+        </div></div>`;
+      }).join('') : '<div class="card empty">No drivers yet.</div>';
       $$('#dl [data-id]').forEach((card) => {
         const d = S.drivers.find((x) => x.id === Number(card.dataset.id));
         card.querySelectorAll('[data-act]').forEach((b) => {
           b.onclick = async () => {
             const a = b.dataset.act;
-            if (a === 'share') return shareLink(d);
+            if (a === 'share') return shareLink(d, load);
             if (a === 'edit') return driverSheet(d, load);
             if (a === 'newlink') {
-              if (!(await confirm('Make a new link?', `${d.name}'s current link will stop working. You'll need to send the new one.`, 'New link'))) return;
-              return guard(async () => { const r = await api(`/api/admin/drivers/${d.id}/new-link`, { method: 'POST', body: {} }); await load(); shareLink(r.driver); });
+              if (!(await confirm('Make a new link?', `${d.name}'s current link will stop working. You'll need to send the setup again.`, 'New link'))) return;
+              return guard(async () => { const r = await api(`/api/admin/drivers/${d.id}/new-link`, { method: 'POST', body: {} }); await load(); shareLink(r.driver, load); });
             }
             if (a === 'toggle') {
               if (d.active && !(await confirm('Turn off driver?', `${d.name}'s link will stop working until you turn them back on.`, 'Turn off'))) return;
@@ -713,32 +741,70 @@
     await load();
   }
 
-  function shareLink(d) {
+  function setupMessage(d) {
     const link = `${location.origin}/d/${d.token}`;
-    const msg = `Hola ${d.name}, para las rutas de ${S.settings.company_name}:\nTu enlace: ${link}\n\nANDROID:\n1) Instala la app Summit Chofer: ${location.origin}/app.apk\n2) Ábrela, pega tu enlace y toca Entrar.\n3) Acepta la ubicación, la batería y las notificaciones.\n\nIPHONE:\n1) Abre este enlace y sigue los pasos (OwnTracks): ${location.origin}/ot/${d.token}\n2) Luego usa tu enlace para las rutas.`;
+    const hi = `Hola ${d.name}, para las rutas de ${S.settings.company_name}:`;
+    if (d.phone_type === 'iphone') {
+      return `${hi}\n1) Abre este enlace y sigue los pasos (instalar OwnTracks, tocar Configurar, permitir ubicación "Siempre"): ${location.origin}/ot/${d.token}\n2) Cada día abre tu enlace de rutas y toca "Comenzar ruta": ${link}`;
+    }
+    return `${hi}\n1) Instala la app Summit Chofer: ${location.origin}/app.apk\n2) Ábrela, pega este enlace y toca Entrar: ${link}\n3) Acepta la ubicación, la batería y las notificaciones.\nCada día abre la app y toca "Comenzar ruta".`;
+  }
+
+  function shareLink(d, after) {
+    if (!d.phone_type) {
+      const s = sheet(`${d.name}: which phone?`, `<p class="muted" style="margin-top:0">The setup is different for each.</p>
+        <div class="grid2"><button class="btn-lg" data-pt="android">Android</button><button class="btn-lg" data-pt="iphone">iPhone</button></div>`);
+      s.el.querySelectorAll('[data-pt]').forEach((b) => b.onclick = () => guard(async () => {
+        const r = await api(`/api/admin/drivers/${d.id}`, { method: 'PATCH', body: { phone_type: b.dataset.pt } });
+        s.close(); if (after) await after(); shareLink(r.driver, after);
+      }));
+      return;
+    }
+    const link = `${location.origin}/d/${d.token}`;
+    const msg = setupMessage(d);
+    const ts = trackingStatus(d);
     const phone = String(d.phone || '').replace(/[^\d]/g, '');
     const wa = phone ? `https://wa.me/${phone.length === 10 ? '1' + phone : phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
-    const s = sheet(`${d.name}'s link`, `<div class="link-box" style="margin-bottom:12px">${esc(link)}</div>
+    const steps = d.phone_type === 'iphone'
+      ? `<li>Send the message below.</li><li>Driver installs <b>OwnTracks</b> (free, App Store) and taps <b>Configurar OwnTracks</b> on the page.</li><li>Driver allows location <b>Always</b> + <b>Precise</b>.</li><li>Every day: open the route link, tap <b>Comenzar ruta</b> (OwnTracks turns on by itself and turns off when the route ends).</li>`
+      : `<li>Send the message below.</li><li>Driver installs <b>Summit Chofer</b> from the link (allow “install from this source”).</li><li>Driver opens it, pastes the link, taps the buttons to allow location, battery and notifications.</li><li>Every day: open the app, tap <b>Comenzar ruta</b>.</li>`;
+    const s = sheet(`Set up ${d.name} · ${PHONE[d.phone_type]}`, `
+      <div class="small" style="margin-bottom:10px;color:${ts.ok ? 'var(--green)' : 'var(--orange)'}"><b>${ts.ok ? '✓' : '✗'} ${ts.text}</b></div>
+      <ol class="small" style="margin:0 0 12px;padding-left:18px;line-height:1.5">${steps}</ol>
+      <div class="link-box small" style="white-space:pre-wrap;margin-bottom:12px">${esc(msg)}</div>
       <div class="list"><a class="btn btn-green" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>
       <a class="btn" href="sms:${phone}?&body=${encodeURIComponent(msg)}">Text message</a>
-      <button id="cp">${icon('copy', 18)} Copy link</button>
-      <a class="btn btn-ghost" href="${link}" target="_blank" rel="noopener">Open driver page</a></div>`);
-    $('#cp', s.el).onclick = async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { toast('Copy failed', true); } };
+      <button id="cp">${icon('copy', 18)} Copy message</button>
+      <a class="btn btn-ghost" href="${link}" target="_blank" rel="noopener">Open driver page</a>
+      <button class="btn-ghost" id="sw">Switch to ${d.phone_type === 'iphone' ? 'Android' : 'iPhone'}</button></div>`);
+    $('#cp', s.el).onclick = async () => { try { await navigator.clipboard.writeText(msg); toast('Message copied'); } catch { toast('Copy failed', true); } };
+    $('#sw', s.el).onclick = () => guard(async () => {
+      const r = await api(`/api/admin/drivers/${d.id}`, { method: 'PATCH', body: { phone_type: d.phone_type === 'iphone' ? 'android' : 'iphone' } });
+      s.close(); if (after) await after(); shareLink(r.driver, after);
+    });
   }
 
   function driverSheet(d, after) {
+    const pt = d ? d.phone_type : '';
     const s = sheet(d ? 'Edit driver' : 'New driver', `<form id="df">
       <label class="field"><span>Name</span><input type="text" name="name" value="${esc(d ? d.name : '')}" maxlength="80" required></label>
-      <label class="field"><span>Mobile (for sending the link)</span><input type="tel" name="phone" value="${esc(d ? d.phone : '')}" maxlength="40"></label>
+      <label class="field"><span>Mobile (for sending the setup)</span><input type="tel" name="phone" value="${esc(d ? d.phone : '')}" maxlength="40"></label>
+      <div class="field"><span>Phone type</span>
+        <div class="row" style="gap:16px;margin-top:4px">
+          <label class="check"><input type="radio" name="pt" value="android" ${pt === 'android' ? 'checked' : ''} required><span>Android</span></label>
+          <label class="check"><input type="radio" name="pt" value="iphone" ${pt === 'iphone' ? 'checked' : ''}><span>iPhone</span></label>
+        </div></div>
       <button class="btn-primary btn-block" type="submit">Save</button></form>`);
     $('#df', s.el).onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target;
+      const ptv = (f.querySelector('[name=pt]:checked') || {}).value;
+      if (!ptv) return toast('Pick Android or iPhone', true);
       await busy(f.querySelector('[type=submit]'), () => guard(async () => {
-        const body = { name: f.name.value, phone: f.phone.value };
+        const body = { name: f.name.value, phone: f.phone.value, phone_type: ptv };
         const r = d ? await api(`/api/admin/drivers/${d.id}`, { method: 'PATCH', body }) : await api('/api/admin/drivers', { method: 'POST', body });
         s.close(); await after();
-        if (!d) shareLink(r.driver); else toast('Saved');
+        if (!d || d.phone_type !== ptv) shareLink(r.driver, after); else toast('Saved');
       }));
     };
   }
@@ -758,7 +824,7 @@
           <label class="field"><span>Usual start time</span><input type="time" name="default_start_time" value="${esc(st.default_start_time)}"></label>
           <label class="field"><span>Minutes at each stop</span><input type="number" name="service_minutes" min="0" max="240" value="${st.service_minutes}"></label>
         </div>
-        <label class="check"><input type="checkbox" name="return_to_depot" ${st.return_to_depot ? 'checked' : ''}><span>New routes return to the start at the end</span></label>
+        <label class="check"><input type="checkbox" name="return_to_depot" ${st.return_to_depot ? 'checked' : ''}><span>Drivers come back to the office at the end (counted in the order and total time)</span></label>
         <label class="check"><input type="checkbox" name="photo_required" ${st.photo_required ? 'checked' : ''}><span>Driver must take a photo to mark a stop delivered</span></label>
         <label class="field"><span>Time zone</span><select name="timezone">${['America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles'].map((z) => `<option ${z === st.timezone ? 'selected' : ''}>${z}</option>`).join('')}</select></label>
         <button class="btn-primary btn-block" type="submit">Save</button>
